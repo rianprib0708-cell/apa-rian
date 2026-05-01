@@ -6,7 +6,7 @@
     <title>3D Stable Particle Hand Gesture</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        #video-container { position: absolute; bottom: 20px; right: 20px; width: 180px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.5); transform: scaleX(-1); }
+        #video-container { position: absolute; bottom: 20px; right: 20px; width: 180px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.5); transform: scaleX(-1); z-index: 10; }
         #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; text-shadow: 2px 2px 4px #000; z-index: 100; }
         .hint { font-size: 0.9em; color: #ccc; margin-top: 10px; }
     </style>
@@ -14,12 +14,12 @@
 <body>
 
 <div id="ui">
-    <h2 id="status">Sistem Loading...</h2>
+    <h2 id="status">Memuat AI...</h2>
     <p id="current-shape">Pola: Sphere</p>
     <div class="hint">
+        • Pastikan Izin Kamera diberikan (Allow)<br>
         • Kepalkan tangan: Kumpulkan Energi<br>
-        • Buka kepalan: <b>MELEDAK & GANTI POLA</b><br>
-        • Cubit (Pinch): Perbesar Pola<br>
+        • Buka kepalan: <b>MELEDAK</b><br>
         • Geser tangan: Menggerakkan Objek
     </div>
 </div>
@@ -43,7 +43,6 @@ const PARTICLE_COUNT = 6000;
 let handLandmarker;
 let video = document.getElementById("input-video");
 const canvasElement = document.getElementById("video-container");
-const canvasCtx = canvasElement.getContext("2d");
 
 // --- THREE.JS SETUP ---
 const scene = new THREE.Scene();
@@ -57,8 +56,10 @@ const geometry = new THREE.BufferGeometry();
 const posArray = new Float32Array(PARTICLE_COUNT * 3);
 const colorArray = new Float32Array(PARTICLE_COUNT * 3);
 
+// Posisi awal acak
 for(let i=0; i<PARTICLE_COUNT*3; i++) {
     posArray[i] = (Math.random() - 0.5) * 10;
+    colorArray[i] = Math.random();
 }
 
 geometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
@@ -74,7 +75,7 @@ const material = new THREE.PointsMaterial({
 
 const points = new THREE.Points(geometry, material);
 scene.add(points);
-camera.position.z = 10;
+camera.position.z = 12; // Mundurkan kamera sedikit agar objek terlihat jelas
 
 // --- TEMPLATES ---
 const templates = { sphere: [], heart: [], flower: [], saturn: [], fireworks: [] };
@@ -102,13 +103,13 @@ function generateShapes() {
             const sTheta = Math.sqrt(PARTICLE_COUNT * 0.5 * Math.PI) * sPhi;
             templates.saturn.push(1.8 * Math.cos(sTheta) * Math.sin(sPhi), 1.8 * Math.sin(sTheta) * Math.sin(sPhi), 1.8 * Math.cos(sPhi));
         } else {
-            const rS = 3.5 + Math.random() * 1.5;
+            const rS = 4 + Math.random() * 1.5;
             const aS = Math.random() * Math.PI * 2;
             templates.saturn.push(rS * Math.cos(aS), (Math.random() - 0.5) * 0.2, rS * Math.sin(aS));
         }
 
-        // Fireworks (Random Burst)
-        const rBurst = 4 + Math.random() * 2;
+        // Fireworks
+        const rBurst = 5 + Math.random() * 2;
         const thetaB = Math.random() * Math.PI * 2;
         const phiB = Math.random() * Math.PI;
         templates.fireworks.push(rBurst * Math.cos(thetaB) * Math.sin(phiB), rBurst * Math.sin(thetaB) * Math.sin(phiB), rBurst * Math.cos(phiB));
@@ -123,61 +124,58 @@ let explosionStrength = 0;
 let smoothHandPos = new THREE.Vector3(0, 0, 0);
 
 async function initHandTracking() {
-    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task` },
-        runningMode: "VIDEO", numHands: 1
-    });
-    
-    navigator.mediaDevices.getUserMedia({ video: true }).then(s => {
-        video.srcObject = s;
-        video.play();
-        video.addEventListener("loadeddata", () => {
-            document.getElementById('status').innerText = "Sistem Aktif";
-            predict();
+    try {
+        const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task` },
+            runningMode: "VIDEO", numHands: 1
         });
-    });
+        
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        video.play();
+        document.getElementById('status').innerText = "Kamera Aktif";
+        predict();
+    } catch (err) {
+        document.getElementById('status').innerText = "Gagal Akses Kamera!";
+        console.error(err);
+    }
 }
 
 function predict() {
-    const results = handLandmarker.detectForVideo(video, performance.now());
-    if (results.landmarks && results.landmarks.length > 0) {
-        const hand = results.landmarks[0];
-        
-        // 1. Smoothing Posisi Tangan
-        const targetX = -(hand[9].x - 0.5) * 20; // Dibalik agar searah tangan
-        const targetY = -(hand[9].y - 0.5) * 20;
-        smoothHandPos.x += (targetX - smoothHandPos.x) * 0.15;
-        smoothHandPos.y += (targetY - smoothHandPos.y) * 0.15;
-        points.position.set(smoothHandPos.x, smoothHandPos.y, 0);
+    if (handLandmarker) {
+        const results = handLandmarker.detectForVideo(video, performance.now());
+        if (results.landmarks && results.landmarks.length > 0) {
+            const hand = results.landmarks[0];
+            
+            // Pergerakan
+            const targetX = -(hand[9].x - 0.5) * 25;
+            const targetY = -(hand[9].y - 0.5) * 25;
+            smoothHandPos.x += (targetX - smoothHandPos.x) * 0.1;
+            smoothHandPos.y += (targetY - smoothHandPos.y) * 0.1;
+            points.position.set(smoothHandPos.x, smoothHandPos.y, 0);
 
-        // 2. Deteksi Kepalan (Fist)
-        const dist = (p1, p2) => Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2);
-        const palm = hand[0];
-        const avgDist = (dist(hand[8], palm) + dist(hand[12], palm) + dist(hand[16], palm) + dist(hand[20], palm)) / 4;
-        
-        const wasFist = isFist;
-        isFist = avgDist < 0.13;
+            // Deteksi Kepalan
+            const dist = (p1, p2) => Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2);
+            const avgDist = (dist(hand[8], hand[0]) + dist(hand[12], hand[0]) + dist(hand[16], hand[0]) + dist(hand[20], hand[0])) / 4;
+            
+            const wasFist = isFist;
+            isFist = avgDist < 0.13;
 
-        // 3. Trigger Ledakan & Ganti Pola
-        if (wasFist && !isFist) {
-            explosionStrength = 1.2;
-            const shapes = ['sphere', 'heart', 'flower', 'saturn', 'fireworks'];
-            currentTemplate = shapes[Math.floor(Math.random() * shapes.length)];
-            document.getElementById('current-shape').innerText = `Pola: ${currentTemplate.toUpperCase()}`;
+            if (wasFist && !isFist) {
+                explosionStrength = 1.5;
+                const shapes = ['sphere', 'heart', 'flower', 'saturn', 'fireworks'];
+                currentTemplate = shapes[Math.floor(Math.random() * shapes.length)];
+                document.getElementById('current-shape').innerText = `Pola: ${currentTemplate.toUpperCase()}`;
+            }
+
+            // Warna berdasarkan posisi jari telunjuk
+            const colorAttr = geometry.attributes.color;
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                colorAttr.setXYZ(i, hand[8].x, 0.5, 1 - hand[8].x);
+            }
+            colorAttr.needsUpdate = true;
         }
-
-        // 4. Pinch (Zoom) - PERBAIKAN DI SINI
-        const pinchDist = dist(hand[4], hand[8]);
-        const scaleValue = THREE.MathUtils.mapLinear(pinchDist, 0.03, 0.25, 0.5, 3);
-        points.scale.lerp(new THREE.Vector3(scaleValue, scaleValue, scaleValue), 0.1);
-
-        // 5. Warna Berdasarkan Posisi
-        const colorAttr = geometry.attributes.color;
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            colorAttr.setXYZ(i, hand[8].x, 0.6, 1 - hand[8].x);
-        }
-        colorAttr.needsUpdate = true;
     }
     requestAnimationFrame(predict);
 }
@@ -191,33 +189,29 @@ function animate() {
         const ix = i * 3, iy = i * 3 + 1, iz = i * 3 + 2;
 
         if (isFist) {
-            // Efek tersedot ke tengah (Suck in)
             posAttr.array[ix] *= 0.8;
             posAttr.array[iy] *= 0.8;
             posAttr.array[iz] *= 0.8;
         } else {
-            // Transisi ke target shape
             let tx = targetArray[ix];
             let ty = targetArray[iy];
             let tz = targetArray[iz];
 
-            // Tambahkan efek ledakan jika baru dilepas
-            if (explosionStrength > 0.01) {
-                posAttr.array[ix] += (Math.random() - 0.5) * explosionStrength * 10;
-                posAttr.array[iy] += (Math.random() - 0.5) * explosionStrength * 10;
-                posAttr.array[iz] += (Math.random() - 0.5) * explosionStrength * 10;
+            if (explosionStrength > 0.05) {
+                posAttr.array[ix] += (Math.random() - 0.5) * explosionStrength * 8;
+                posAttr.array[iy] += (Math.random() - 0.5) * explosionStrength * 8;
+                posAttr.array[iz] += (Math.random() - 0.5) * explosionStrength * 8;
             }
 
-            posAttr.array[ix] += (tx - posAttr.array[ix]) * 0.1;
-            posAttr.array[iy] += (ty - posAttr.array[iy]) * 0.1;
-            posAttr.array[iz] += (tz - posAttr.array[iz]) * 0.1;
+            posAttr.array[ix] += (tx - posAttr.array[ix]) * 0.08;
+            posAttr.array[iy] += (ty - posAttr.array[iy]) * 0.08;
+            posAttr.array[iz] += (tz - posAttr.array[iz]) * 0.08;
         }
     }
     
-    if (explosionStrength > 0) explosionStrength *= 0.85;
-    
+    if (explosionStrength > 0) explosionStrength *= 0.9;
     posAttr.needsUpdate = true;
-    points.rotation.y += 0.005;
+    points.rotation.y += 0.003;
     renderer.render(scene, camera);
 }
 
